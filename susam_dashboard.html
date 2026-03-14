@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>수삼 가격 동향 대시보드</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f5f0; color: #1a1a1a; min-height: 100vh; }
+  .page { max-width: 960px; margin: 0 auto; padding: 2rem 1.5rem; }
+  .top { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 2rem; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 22px; font-weight: 600; color: #111; }
+  .sub { font-size: 13px; color: #888; margin-top: 4px; }
+  .tabs { display: flex; gap: 6px; }
+  .tab { font-size: 13px; padding: 6px 18px; border: 1px solid #ddd; border-radius: 20px; cursor: pointer; background: #fff; color: #555; transition: all .15s; }
+  .tab.on { background: #1a6bbf; color: #fff; border-color: #1a6bbf; font-weight: 500; }
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 2rem; }
+  @media(max-width:600px){ .metrics { grid-template-columns: repeat(2,1fr); } }
+  .metric { background: #fff; border-radius: 10px; padding: 16px 18px; border: 1px solid #e8e8e8; }
+  .mlabel { font-size: 12px; color: #888; margin-bottom: 6px; }
+  .mval { font-size: 22px; font-weight: 600; color: #111; }
+  .msub { font-size: 12px; margin-top: 4px; color: #888; }
+  .up { color: #d94040; } .dn { color: #1a9e6e; } .flat { color: #888; }
+  .card { background: #fff; border-radius: 12px; padding: 1.5rem; border: 1px solid #e8e8e8; margin-bottom: 1.25rem; }
+  .card-title { font-size: 13px; font-weight: 600; color: #555; margin-bottom: 12px; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: #666; margin-bottom: 12px; }
+  .leg { display: flex; align-items: center; gap: 5px; }
+  .ldot { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+  .chart-wrap { position: relative; width: 100%; height: 260px; }
+  .note { font-size: 11px; color: #aaa; margin-top: 1.5rem; text-align: center; }
+  .upload-bar { background: #fff; border: 1px dashed #ccc; border-radius: 10px; padding: 1rem 1.5rem; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .upload-bar label { font-size: 13px; color: #555; }
+  .upload-bar input { font-size: 13px; }
+  .upload-bar button { font-size: 13px; padding: 6px 16px; background: #1a6bbf; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+  .upload-bar button:hover { background: #155a9e; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 10px; background: #e8f0fb; color: #1a6bbf; margin-left: 6px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="top">
+    <div>
+      <h1>수삼 가격 동향 <span class="badge" id="dataBadge">0일치</span></h1>
+      <div class="sub">금산시장 · 4년삼 · 750g 기준</div>
+    </div>
+    <div class="tabs">
+      <button class="tab on" onclick="setView('10')">10뿌리</button>
+      <button class="tab" onclick="setView('20')">20뿌리</button>
+    </div>
+  </div>
+
+  <div class="upload-bar">
+    <label>📂 데이터 업데이트:</label>
+    <input type="file" id="jsonFile" accept=".json">
+    <button onclick="loadFile()">불러오기</button>
+    <span id="fileStatus" style="font-size:12px;color:#888;"></span>
+  </div>
+
+  <div class="metrics" id="metrics"></div>
+
+  <div class="card">
+    <div class="card-title">금일가격 추이 (원 / 750g)</div>
+    <div class="legend">
+      <span class="leg"><span class="ldot" style="background:#2980d4"></span>금일가격</span>
+      <span class="leg"><span class="ldot" style="background:#93C5F5"></span>전월평균</span>
+      <span class="leg"><span class="ldot" style="background:#e07555"></span>전년동기</span>
+    </div>
+    <div class="chart-wrap"><canvas id="lineChart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">등락률 비교 (%)</div>
+    <div class="legend">
+      <span class="leg"><span class="ldot" style="background:#3bbf90"></span>전장 대비</span>
+      <span class="leg"><span class="ldot" style="background:#2980d4"></span>전월 대비</span>
+      <span class="leg"><span class="ldot" style="background:#d95030"></span>전년 대비</span>
+    </div>
+    <div class="chart-wrap"><canvas id="barChart"></canvas></div>
+  </div>
+
+  <div class="note">* 브라우저에서 직접 열어 사용 · JSON 파일 불러오기로 데이터 업데이트</div>
+</div>
+
+<script>
+let allData = [];
+let view = '10';
+let lc, bc;
+
+const BUILTIN = [
+  {date:"2026-01-08",r10:{금일:34000,전월:31833,전년:32000,전장율:5.9,전월율:6.4,전년율:5.9},r20:{금일:26000,전월:25000,전년:24000,전장율:null,전월율:3.8,전년율:7.7}},
+  {date:"2026-02-09",r10:{금일:38000,전월:31833,전년:33000,전장율:2.6,전월율:16.2,전년율:13.2},r20:{금일:30000,전월:25000,전년:24000,전장율:3.3,전월율:16.7,전년율:20.0}},
+  {date:"2026-02-10",r10:{금일:38000,전월:31833,전년:33000,전장율:2.6,전월율:16.2,전년율:13.2},r20:{금일:30000,전월:25000,전년:24000,전장율:3.3,전월율:16.7,전년율:20.0}},
+  {date:"2026-02-11",r10:{금일:38000,전월:31833,전년:33000,전장율:2.6,전월율:16.2,전년율:13.2},r20:{금일:30000,전월:25000,전년:24000,전장율:3.3,전월율:16.7,전년율:20.0}},
+  {date:"2026-02-12",r10:{금일:38000,전월:31833,전년:33000,전장율:2.6,전월율:16.2,전년율:13.2},r20:{금일:30000,전월:25000,전년:24000,전장율:3.3,전월율:16.7,전년율:20.0}},
+  {date:"2026-02-13",r10:{금일:38000,전월:31833,전년:33000,전장율:2.6,전월율:16.2,전년율:13.2},r20:{금일:30000,전월:25000,전년:24000,전장율:3.3,전월율:16.7,전년율:20.0}},
+  {date:"2026-02-23",r10:{금일:42000,전월:31833,전년:31000,전장율:9.5,전월율:24.2,전년율:26.2},r20:{금일:33000,전월:25000,전년:24000,전장율:3.0,전월율:24.2,전년율:27.3}},
+  {date:"2026-02-24",r10:{금일:42000,전월:31833,전년:31000,전장율:9.5,전월율:24.2,전년율:26.2},r20:{금일:33000,전월:25000,전년:24000,전장율:3.0,전월율:24.2,전년율:27.3}},
+  {date:"2026-02-25",r10:{금일:45000,전월:31833,전년:30000,전장율:null,전월율:29.3,전년율:33.3},r20:{금일:33000,전월:25000,전년:24000,전장율:null,전월율:24.2,전년율:27.3}},
+  {date:"2026-02-26",r10:{금일:45000,전월:31833,전년:30000,전장율:null,전월율:29.3,전년율:33.3},r20:{금일:33000,전월:25000,전년:24000,전장율:null,전월율:24.2,전년율:27.3}},
+  {date:"2026-02-27",r10:{금일:45000,전월:31833,전년:30000,전장율:null,전월율:29.3,전년율:33.3},r20:{금일:33000,전월:25000,전년:24000,전장율:null,전월율:24.2,전년율:27.3}},
+  {date:"2026-03-03",r10:{금일:45000,전월:31833,전년:30000,전장율:null,전월율:29.3,전년율:33.3},r20:{금일:33000,전월:25000,전년:24000,전장율:null,전월율:24.2,전년율:27.3}},
+  {date:"2026-03-04",r10:{금일:45000,전월:31833,전년:30000,전장율:null,전월율:29.3,전년율:33.3},r20:{금일:33000,전월:25000,전년:24000,전장율:null,전월율:24.2,전년율:27.3}},
+  {date:"2026-03-05",r10:{금일:45000,전월:31833,전년:30000,전장율:null,전월율:29.3,전년율:33.3},r20:{금일:33000,전월:25000,전년:24000,전장율:null,전월율:24.2,전년율:27.3}},
+  {date:"2026-03-09",r10:{금일:45000,전월:31833,전년:31000,전장율:null,전월율:29.3,전년율:31.1},r20:{금일:33000,전월:25000,전년:24000,전장율:null,전월율:24.2,전년율:27.3}},
+  {date:"2026-03-11",r10:{금일:45000,전월:31833,전년:31000,전장율:null,전월율:29.3,전년율:31.1},r20:{금일:33000,전월:25000,전년:24000,전장율:null,전월율:24.2,전년율:27.3}},
+  {date:"2026-03-12",r10:{금일:45000,전월:31833,전년:31000,전장율:null,전월율:29.3,전년율:31.1},r20:{금일:33000,전월:25000,전년:24000,전장율:null,전월율:24.2,전년율:27.3}},
+  {date:"2026-03-13",r10:{금일:45000,전월:31833,전년:31000,전장율:null,전월율:29.3,전년율:31.1},r20:{금일:33000,전월:25000,전년:24000,전장율:null,전월율:24.2,전년율:27.3}},
+];
+
+function fromJson(raw) {
+  return raw.filter(d => d['10뿌리']).map(d => ({
+    date: d.date,
+    r10: { 금일: d['10뿌리'].금일가격, 전월: d['10뿌리'].전월평균, 전년: d['10뿌리'].전년동기가격, 전장율: d['10뿌리'].전장등락률, 전월율: d['10뿌리'].전월등락률, 전년율: d['10뿌리'].전년등락률 },
+    r20: { 금일: d['20뿌리'].금일가격, 전월: d['20뿌리'].전월평균, 전년: d['20뿌리'].전년동기가격, 전장율: d['20뿌리'].전장등락률, 전월율: d['20뿌리'].전월등락률, 전년율: d['20뿌리'].전년등락률 },
+  }));
+}
+
+function loadFile() {
+  const f = document.getElementById('jsonFile').files[0];
+  if (!f) return;
+  const r = new FileReader();
+  r.onload = e => {
+    try {
+      const json = JSON.parse(e.target.result);
+      allData = fromJson(json);
+      document.getElementById('fileStatus').textContent = `✓ ${f.name} 불러옴 (${allData.length}일치)`;
+      document.getElementById('dataBadge').textContent = allData.length + '일치';
+      render();
+    } catch(err) {
+      document.getElementById('fileStatus').textContent = '오류: JSON 형식을 확인해주세요.';
+    }
+  };
+  r.readAsText(f, 'utf-8');
+}
+
+function fmtR(v){ return v==null?'-':(v>=0?'+':'')+v.toFixed(1)+'%'; }
+function rc(v){ return v==null?'flat':v>0?'up':v<0?'dn':'flat'; }
+
+function render() {
+  const data = allData.map(d => view==='10' ? d.r10 : d.r20);
+  const labels = allData.map(d => d.date.slice(5).replace('-','/'));
+  const latest = data[data.length-1];
+  const prev = data.length>1 ? data[data.length-2] : null;
+  const diff = prev ? latest.금일 - prev.금일 : 0;
+
+  document.getElementById('metrics').innerHTML = `
+    <div class="metric"><div class="mlabel">최신 금일가격</div><div class="mval">${latest.금일.toLocaleString()}원</div><div class="msub ${diff>=0?'up':'dn'}">${diff>=0?'▲':'▼'} ${Math.abs(diff).toLocaleString()}원</div></div>
+    <div class="metric"><div class="mlabel">전장 대비</div><div class="mval ${rc(latest.전장율)}">${fmtR(latest.전장율)}</div><div class="msub flat">직전 발표일</div></div>
+    <div class="metric"><div class="mlabel">전월 대비</div><div class="mval ${rc(latest.전월율)}">${fmtR(latest.전월율)}</div><div class="msub flat">전월 평균</div></div>
+    <div class="metric"><div class="mlabel">전년 대비</div><div class="mval ${rc(latest.전년율)}">${fmtR(latest.전년율)}</div><div class="msub flat">전년 동기</div></div>`;
+
+  if(lc) lc.destroy();
+  lc = new Chart(document.getElementById('lineChart'),{
+    type:'line',
+    data:{ labels, datasets:[
+      {label:'금일가격', data:data.map(d=>d.금일), borderColor:'#2980d4', backgroundColor:'rgba(41,128,212,0.07)', tension:0.3, pointRadius:4, fill:true},
+      {label:'전월평균', data:data.map(d=>d.전월), borderColor:'#93C5F5', borderDash:[5,4], tension:0.3, pointRadius:3, fill:false},
+      {label:'전년동기', data:data.map(d=>d.전년), borderColor:'#e07555', borderDash:[3,3], tension:0.3, pointRadius:3, fill:false},
+    ]},
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>c.dataset.label+': '+c.parsed.y.toLocaleString()+'원'}}},
+      scales:{y:{ticks:{callback:v=>v.toLocaleString()+'원',font:{size:11}},grid:{color:'rgba(0,0,0,0.05)'}}, x:{ticks:{font:{size:11},autoSkip:false,maxRotation:45}}}}
+  });
+
+  if(bc) bc.destroy();
+  bc = new Chart(document.getElementById('barChart'),{
+    type:'bar',
+    data:{ labels, datasets:[
+      {label:'전장 대비', data:data.map(d=>d.전장율), backgroundColor:'#3bbf90'},
+      {label:'전월 대비', data:data.map(d=>d.전월율), backgroundColor:'#2980d4'},
+      {label:'전년 대비', data:data.map(d=>d.전년율), backgroundColor:'#d95030'},
+    ]},
+    options:{ responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{display:false}, tooltip:{callbacks:{label:c=>c.dataset.label+': '+(c.parsed.y!=null?c.parsed.y.toFixed(1)+'%':'-')}}},
+      scales:{y:{ticks:{callback:v=>v+'%',font:{size:11}},grid:{color:'rgba(0,0,0,0.05)'}}, x:{ticks:{font:{size:11},autoSkip:false,maxRotation:45}}}}
+  });
+}
+
+function setView(v) {
+  view = v;
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('on',(i===0&&v==='10')||(i===1&&v==='20')));
+  render();
+}
+
+allData = BUILTIN;
+document.getElementById('dataBadge').textContent = allData.length + '일치';
+render();
+</script>
+</body>
+</html>
